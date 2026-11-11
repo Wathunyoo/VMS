@@ -1,0 +1,14 @@
+node_modules
+.next
+.env
+.env.*
+!.env.example
+.pgdata
+storage
+src/generated
+public/ocr
+docs
+*.command
+*.zip
+deploy/.server-env
+.claude

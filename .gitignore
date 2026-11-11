@@ -1,0 +1,15 @@
+node_modules
+.next
+.env
+src/generated
+.pgdata
+public/ocr
+storage/
+
+# secrets: ignore every .env variant except the example
+.env*
+!.env.example
+
+# build / OS junk
+*.tsbuildinfo
+.DS_Store

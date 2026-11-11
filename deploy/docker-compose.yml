@@ -1,0 +1,50 @@
+# มานะบน Server: ฐานข้อมูล + ระบบ + Caddy (HTTPS อัตโนมัติ)
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mana
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?ตั้ง DB_PASSWORD ใน .env}
+      POSTGRES_DB: mana
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mana -d mana"]
+      interval: 5s
+      retries: 20
+
+  app:
+    build: ..
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgresql://mana:${DB_PASSWORD}@db:5432/mana?schema=public
+      BACKUP_DIR: /backups
+    volumes:
+      - ../.env:/app/.env:ro
+      - ../storage:/app/storage
+      - ../backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?ตั้ง SITE_ADDRESS ใน .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

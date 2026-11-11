@@ -1,0 +1,13 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: vms
+      POSTGRES_PASSWORD: vms
+      POSTGRES_DB: vms
+    ports:
+      - "5432:5432"
+    volumes:
+      - vms_pg:/var/lib/postgresql/data
+volumes:
+  vms_pg:

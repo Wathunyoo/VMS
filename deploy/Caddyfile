@@ -1,0 +1,8 @@
+{$SITE_ADDRESS} {
+	encode gzip
+	# รูปถ่าย/สลิปส่งผ่าน Server Action ได้ถึง 8 MB
+	request_body {
+		max_size 10MB
+	}
+	reverse_proxy app:3000
+}

@@ -1,0 +1,695 @@
+// =============================================================
+// Visitor Management System (VMS) — Office & Factory
+// Prisma 7 · PostgreSQL
+// =============================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // URL ถูกกำหนดใน prisma.config.ts (Prisma 7)
+}
+
+// -------------------------------------------------------------
+// Enums
+// -------------------------------------------------------------
+
+enum SiteMode {
+  OFFICE
+  FACTORY
+  VILLAGE // หมู่บ้าน / คอนโด — บ้านเลขที่ + ลูกบ้าน
+}
+
+enum VisitStatus {
+  PENDING_APPROVAL // รอ Host อนุมัติก่อนเข้า (ถ้าเปิดใช้)
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+}
+
+enum VisitPurpose {
+  INTERVIEW // สัมภาษณ์งาน
+  MEETING // ประชุม/พบลูกค้า
+  DELIVERY // ส่งเอกสาร/พัสดุ
+  MAINTENANCE // งานซ่อมบำรุง
+  CONTRACTOR_WORK // ผู้รับเหมา (โรงงาน)
+  CARGO // ขนส่ง/รับ-ส่งสินค้า (โรงงาน)
+  GUEST // เยี่ยมญาติ/เพื่อน (หมู่บ้าน)
+  FOOD_DELIVERY // ส่งอาหาร (หมู่บ้าน)
+  OTHER
+}
+
+enum IdDocumentType {
+  NATIONAL_ID
+  DRIVER_LICENSE
+  PASSPORT
+  OTHER
+}
+
+enum StampStatus {
+  NOT_REQUIRED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum StampMethod {
+  WEB_LINK
+  OTP
+  MANUAL // รปภ./ต้อนรับ ประทับแทน
+}
+
+enum HighRiskWork {
+  HOT_WORK
+  CONFINED_SPACE
+  WORKING_AT_HEIGHTS
+  ELECTRICAL
+  CHEMICAL
+  LIFTING
+}
+
+enum VehicleType {
+  CAR
+  MOTORCYCLE
+  PICKUP
+  VAN
+  TRUCK_4W
+  TRUCK_6W
+  TRUCK_10W
+  TRAILER
+  OTHER
+}
+
+enum VisitEventType {
+  CHECK_IN
+  STAMP_REQUESTED
+  STAMP_APPROVED
+  STAMP_REJECTED
+  OVERSTAY_ALERT
+  CHECK_OUT
+  PASS_REPRINTED
+  HOST_NOTIFIED
+}
+
+// -------------------------------------------------------------
+// Organization (ลูกค้าของแพลตฟอร์ม) — ทุกข้อมูลผูกกับองค์กร
+// -------------------------------------------------------------
+
+enum OrgStatus {
+  PENDING // สมัครแล้ว รอยืนยันอีเมล
+  TRIAL
+  ACTIVE
+  SUSPENDED
+}
+
+model Organization {
+  id              String    @id @default(cuid())
+  /// รหัสองค์กรที่ใช้ตอน login เช่น "acme"
+  slug            String    @unique
+  name            String
+  status          OrgStatus @default(TRIAL)
+  // สมัครใช้งานเอง (self-service signup)
+  contactEmail    String?
+  trialEndsAt     DateTime?
+  termsAcceptedAt DateTime?
+  /// ตั้งค่าเริ่มต้นเสร็จแล้ว (null = ยังอยู่ในขั้นตอน onboarding)
+  onboardedAt     DateTime?
+  /// ประเภทธุรกิจขององค์กร — เลือกครั้งเดียวตอนตั้งค่าเริ่มต้น ทุกสถานที่ใช้โหมดนี้
+  siteMode        SiteMode?
+
+  // ระบบเก็บเงิน (โอน + แนบสลิป) — คิดตามจำนวนจุด Check-in
+  /// ชำระแล้วใช้ได้ถึง (null + ACTIVE = สัญญาพิเศษ/ไม่จำกัด)
+  paidUntil         DateTime?
+  checkInPointLimit Int       @default(2)
+  /// จำนวนบ้านตามสัญญา (โหมดหมู่บ้าน) — null = ไม่จำกัด
+  houseLimit        Int?
+  /// วันสิ้นสุดสัญญา (วันสุดท้ายที่สัญญามีผล, เวลา 00:00 น. ไทย) — ใช้แจ้งเตือนให้ต่อสัญญา
+  contractEndsAt    DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  sites            Site[]
+  tenants          Tenant[]
+  hosts            Host[]
+  loadingBays      LoadingBay[]
+  visitors         Visitor[]
+  visits           Visit[]
+  safetyChecks     FactorySafetyCheck[]
+  vehicles         VehicleInfo[]
+  visitEvents      VisitEvent[]
+  staffUsers       StaffUser[]
+  retentionSetting RetentionSetting?
+  purgeLogs        DataPurgeLog[]
+  billingProfile   BillingProfile?
+  invoices         Invoice[]
+  checkInPoints    CheckInPoint[]
+  formSetting      FormSetting?
+  customFields     CustomField[]
+  guestInvites     GuestInvite[]
+}
+
+// -------------------------------------------------------------
+// Site / Directory
+// -------------------------------------------------------------
+
+model Site {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  code           String
+  name           String
+  mode           SiteMode
+  timezone       String       @default("Asia/Bangkok")
+
+  // นโยบายเวลาเข้าพื้นที่
+  /// null = ไม่จำกัดเวลา
+  defaultMaxStayMinutes Int? @default(480)
+
+  // นโยบายความปลอดภัย (Factory)
+  inductionVersion String? // เวอร์ชันเอกสาร Safety Induction ปัจจุบัน
+
+  tenants      Tenant[]
+  hosts        Host[]
+  loadingBays  LoadingBay[]
+  visits       Visit[]
+  guestInvites GuestInvite[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([organizationId, code])
+}
+
+model Tenant {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  siteId         String
+  site           Site         @relation(fields: [siteId], references: [id])
+  name           String
+  floor          String // "12", "B1", "M"
+  unit           String?
+  phone          String?
+  isActive       Boolean      @default(true)
+
+  hosts        Host[]
+  visits       Visit[]
+  guestInvites GuestInvite[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([organizationId])
+  @@index([siteId, floor])
+  @@index([siteId, name])
+}
+
+/// ผู้ถูกเข้าพบ — พนักงานของผู้เช่า (Office) หรือแผนกในโรงงาน (Factory)
+model Host {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  siteId         String
+  site           Site         @relation(fields: [siteId], references: [id])
+  tenantId       String?
+  tenant         Tenant?      @relation(fields: [tenantId], references: [id])
+  fullName       String
+  department     String?
+  email          String?
+  phone          String?
+  isActive       Boolean      @default(true)
+
+  // LINE Messaging API — ผูกเมื่อ Host ส่งรหัสเชื่อมต่อให้ LINE OA
+  lineUserId            String?
+  lineDisplayName       String?
+  lineLinkedAt          DateTime?
+  lineLinkCode          String?   @unique
+  lineLinkCodeExpiresAt DateTime?
+
+  visits       Visit[]
+  guestInvites GuestInvite[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([organizationId, lineUserId])
+  @@index([organizationId])
+  @@index([siteId, fullName])
+  @@index([tenantId])
+}
+
+model LoadingBay {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  siteId         String
+  site           Site         @relation(fields: [siteId], references: [id])
+  code           String // "LB-01", "WH-A"
+  name           String
+  zone           String?
+  isActive       Boolean      @default(true)
+
+  vehicles VehicleInfo[]
+
+  @@unique([siteId, code])
+  @@index([organizationId])
+}
+
+// -------------------------------------------------------------
+// Visitor (บุคคล) — แยกจากการเข้าพบแต่ละครั้ง
+// -------------------------------------------------------------
+
+model Visitor {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  fullName       String
+  company        String?
+  phone          String?
+  email          String?
+
+  // PDPA: ไม่เก็บเลขบัตรเต็ม — เก็บเฉพาะ hash (ไว้ค้นหา/blacklist) + ค่าที่ mask แล้ว
+  idType         IdDocumentType
+  idNumberHash   String
+  idNumberMasked String
+
+  isBlacklisted Boolean   @default(false)
+  blacklistNote String?
+  pdpaConsentAt DateTime
+  /// เวลาที่ข้อมูลส่วนบุคคลถูกทำให้ไม่ระบุตัวตนตามนโยบายระยะเวลาเก็บ
+  purgedAt      DateTime?
+
+  visits    Visit[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, idType, idNumberHash])
+  @@index([fullName])
+}
+
+// -------------------------------------------------------------
+// Visit (VisitLog) — การเข้าพื้นที่ 1 ครั้ง
+// -------------------------------------------------------------
+
+model Visit {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  passCode       String // รหัสสั้นบนบัตร เช่น "V-7K3Q9P" (ไม่ซ้ำภายในองค์กร)
+  badgeNumber    String? // เลขบัตรพลาสติกที่แลกไป (ถ้ามี)
+
+  siteId String
+  site   Site     @relation(fields: [siteId], references: [id])
+  mode   SiteMode
+
+  visitorId String
+  visitor   Visitor @relation(fields: [visitorId], references: [id])
+  hostId    String?
+  host      Host?   @relation(fields: [hostId], references: [id])
+  tenantId  String?
+  tenant    Tenant? @relation(fields: [tenantId], references: [id])
+
+  purpose     VisitPurpose
+  purposeNote String?
+  status      VisitStatus  @default(CHECKED_IN)
+
+  facePhotoUrl   String?
+  /// ภาพบัตรที่สแกน (บัตรประชาชน/ใบขับขี่/พาสปอร์ต) — ลบพร้อมรูปถ่ายตามนโยบาย PDPA
+  idCardPhotoUrl String?
+
+  /// ช่องกรอกเพิ่มเติมขององค์กร — เก็บชื่อช่อง ณ วันที่บันทึก [{ id, label, value }]
+  customValues Json?
+
+  checkInAt          DateTime  @default(now())
+  expectedCheckOutAt DateTime? /// null = ไม่จำกัดเวลา
+  checkOutAt         DateTime?
+  timeSpentMinutes   Int?
+  overstayMinutes    Int?
+
+  // E-Stamp / Host approval
+  stampStatus       StampStatus  @default(NOT_REQUIRED)
+  stampMethod       StampMethod?
+  stampToken        String?      @unique // ใช้ในลิงก์ /stamp/:token
+  stampOtpHash      String?
+  stampOtpExpiresAt DateTime?
+  stampOtpAttempts  Int          @default(0)
+  stampedAt         DateTime?
+  stampedBy         String?
+
+  checkedInBy  String? // user id ของ รปภ./ต้อนรับ
+  checkedOutBy String?
+
+  safetyCheck FactorySafetyCheck?
+  vehicle     VehicleInfo?
+  events      VisitEvent[]
+  /// แขกที่ลูกบ้าน/Host แจ้งล่วงหน้า (ถ้า Check-in ด้วย QR)
+  guestInvite GuestInvite?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, passCode])
+  @@index([organizationId, checkInAt])
+  @@index([organizationId, status, checkInAt])
+  @@index([siteId, status, checkInAt])
+  @@index([visitorId])
+  @@index([hostId])
+}
+
+model FactorySafetyCheck {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  visitId        String       @unique
+  visit          Visit        @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  // PPE checklist
+  ppeHelmet         Boolean @default(false)
+  ppeSafetyShoes    Boolean @default(false)
+  ppeReflectiveVest Boolean @default(false)
+  ppeSafetyGlasses  Boolean @default(false)
+  ppeEarProtection  Boolean @default(false)
+  ppeGloves         Boolean @default(false)
+
+  // งานเสี่ยง + ใบอนุญาต
+  highRiskWorks HighRiskWork[]
+  workPermitId  String?
+
+  // Safety Induction
+  inductionCompleted Boolean   @default(false)
+  inductionVersion   String?
+  inductionAckAt     DateTime?
+
+  remarks   String?
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model VehicleInfo {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  visitId        String       @unique
+  visit          Visit        @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  plateNumber   String
+  plateProvince String?
+  vehicleType   VehicleType
+  platePhotoUrl String?
+  driverName    String?
+
+  // Cargo (Factory)
+  loadingBayId     String?
+  loadingBay       LoadingBay? @relation(fields: [loadingBayId], references: [id])
+  cargoDescription String?
+  sealNumber       String?
+  weightInKg       Decimal?    @db.Decimal(12, 2)
+  weightOutKg      Decimal?    @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([plateNumber])
+}
+
+// -------------------------------------------------------------
+// แจ้งแขกล่วงหน้า — ลูกบ้าน/Host สร้าง QR ส่งให้แขก แขกแสดง QR ที่จุด รปภ.
+// -------------------------------------------------------------
+
+enum GuestInviteStatus {
+  ACTIVE
+  USED
+  CANCELLED
+}
+
+model GuestInvite {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  siteId         String
+  site           Site              @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  tenantId       String?
+  tenant         Tenant?           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// ผู้แจ้ง (ลูกบ้าน / Host)
+  hostId         String
+  host           Host              @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  /// รหัสลับใน QR / ลิงก์ของแขก
+  token          String            @unique
+  guestName      String?
+  plateNumber    String?
+  note           String?
+  validFrom      DateTime
+  validUntil     DateTime
+  status         GuestInviteStatus @default(ACTIVE)
+  usedAt         DateTime?
+  visitId        String?           @unique
+  visit          Visit?            @relation(fields: [visitId], references: [id], onDelete: SetNull)
+  cancelledAt    DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([organizationId, validFrom])
+  @@index([hostId, validUntil])
+}
+
+/// Audit trail ของแต่ละ Visit
+model VisitEvent {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  visitId        String
+  visit          Visit          @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  type           VisitEventType
+  actor          String?
+  payload        Json?
+  createdAt      DateTime       @default(now())
+
+  @@index([organizationId])
+  @@index([visitId, createdAt])
+}
+
+// -------------------------------------------------------------
+// Staff authentication
+// -------------------------------------------------------------
+
+enum StaffRole {
+  ADMIN // จัดการบัญชีเจ้าหน้าที่ได้
+  STAFF // รปภ. / ต้อนรับ
+}
+
+model StaffUser {
+  id                 String        @id @default(cuid())
+  organizationId     String
+  organization       Organization  @relation(fields: [organizationId], references: [id])
+  username           String
+  fullName           String
+  email              String?
+  emailVerifiedAt    DateTime?
+  role               StaffRole     @default(STAFF)
+  passwordHash       String
+  mustChangePassword Boolean       @default(true)
+  isActive           Boolean       @default(true)
+  failedLoginCount   Int           @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  /// จุด Check-in ประจำ (null = ไม่ผูกจุด — ใช้เครื่องที่ผู้ดูแลลงทะเบียนไว้)
+  checkInPointId     String?
+  checkInPoint       CheckInPoint? @relation(fields: [checkInPointId], references: [id], onDelete: SetNull)
+
+  sessions  StaffSession[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([organizationId, username])
+  @@index([checkInPointId])
+}
+
+/// id = SHA-256 ของ session token (token จริงอยู่ใน cookie เท่านั้น)
+model StaffSession {
+  id        String    @id
+  userId    String
+  user      StaffUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  userAgent String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// -------------------------------------------------------------
+// Data retention (PDPA)
+// -------------------------------------------------------------
+
+enum PurgeTrigger {
+  AUTO
+  MANUAL
+}
+
+/// ตั้งค่าระยะเวลาเก็บข้อมูล (1 แถวต่อองค์กร)
+model RetentionSetting {
+  organizationId   String       @id
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  photoDays        Int          @default(90)
+  personalDataDays Int          @default(365)
+  autoEnabled      Boolean      @default(true)
+  updatedBy        String?
+  updatedAt        DateTime     @updatedAt
+}
+
+/// ประวัติการลบ/ทำให้ไม่ระบุตัวตน — หลักฐานการปฏิบัติตาม PDPA
+model DataPurgeLog {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  ranAt              DateTime     @default(now())
+  trigger            PurgeTrigger
+  actor              String?
+  photoDays          Int
+  personalDataDays   Int
+  photosDeleted      Int
+  visitorsAnonymized Int
+  vehiclesAnonymized Int
+  visitsCleaned      Int
+  error              String?
+
+  @@index([organizationId])
+  @@index([ranAt])
+}
+
+// -------------------------------------------------------------
+// Billing (โอนเงิน + แนบสลิป) และจุด Check-in
+// -------------------------------------------------------------
+
+enum BillingPeriod {
+  MONTHLY
+  YEARLY
+}
+
+enum InvoiceStatus {
+  PENDING_PAYMENT // ออกใบแจ้งหนี้แล้ว รอโอน
+  PENDING_REVIEW // แนบสลิปแล้ว รอผู้ให้บริการตรวจ
+  PAID
+  REJECTED // สลิปไม่ถูกต้อง — แนบใหม่ได้
+  CANCELLED
+}
+
+/// ข้อมูลออกใบกำกับภาษีของลูกค้า
+model BillingProfile {
+  organizationId String       @id
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  legalName      String
+  taxId          String
+  branch         String       @default("สำนักงานใหญ่")
+  address        String
+  billingEmail   String
+  updatedAt      DateTime     @updatedAt
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  number         String        @unique // INV-202610-0001
+  status         InvoiceStatus @default(PENDING_PAYMENT)
+  period         BillingPeriod
+  points         Int
+  months         Int
+  unitPrice      Decimal       @db.Decimal(12, 2) // ต่อจุดต่อเดือน
+  subtotal       Decimal       @db.Decimal(12, 2)
+  vat            Decimal       @db.Decimal(12, 2)
+  total          Decimal       @db.Decimal(12, 2)
+  withholding    Decimal       @db.Decimal(12, 2) // หัก ณ ที่จ่าย (0 ถ้าไม่หัก)
+  netPayable     Decimal       @db.Decimal(12, 2) // ยอดที่ต้องโอน
+  /// ข้อมูลผู้ซื้อ ณ วันที่ออกเอกสาร (เอกสารภาษีต้องไม่เปลี่ยนตามโปรไฟล์ภายหลัง)
+  buyer          Json
+  slipPath       String?
+  /// sha256 ของไฟล์สลิป — กันแนบไฟล์เดิมซ้ำ
+  slipHash       String?
+  /// เลขอ้างอิงรายการโอนจาก QR บนสลิป — กันใช้รายการโอนเดิมซ้ำ
+  slipTransRef   String?
+  /// ผลตรวจสลิปอัตโนมัติ (SlipCheck)
+  slipCheck      Json?
+  slipUploadedAt DateTime?
+  transferredAt  DateTime?
+  reviewNote     String?
+  reviewedBy     String?
+  receiptNumber  String?       @unique // RC-202610-0001 (ใบเสร็จ/ใบกำกับภาษี)
+  paidAt         DateTime?
+  coverFrom      DateTime?
+  coverUntil     DateTime?
+  createdBy      String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId, createdAt])
+  @@index([status])
+  @@index([slipHash])
+  @@index([slipTransRef])
+}
+
+/// เลขที่เอกสารต่อเนื่อง (ทั้งแพลตฟอร์ม) เช่น key = "INV-202610"
+model DocumentCounter {
+  key   String @id
+  value Int
+}
+
+/// อุปกรณ์ที่ลงทะเบียนเป็นจุด Check-in (cookie vms_device เก็บ token จริง, DB เก็บ hash)
+model CheckInPoint {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  /// null = สร้างจุดไว้แล้ว ยังไม่มีเครื่อง (เครื่องแรกที่เจ้าหน้าที่ประจำจุดเข้าระบบจะกลายเป็นจุดนี้)
+  tokenHash      String?      @unique
+  lastSeenAt     DateTime?
+  revokedAt      DateTime?
+  createdBy      String
+  createdAt      DateTime     @default(now())
+
+  /// เจ้าหน้าที่ประจำจุด — เข้าระบบที่เครื่องไหน เครื่องนั้นเป็นจุดนี้
+  staff StaffUser[]
+
+  @@index([organizationId, revokedAt])
+}
+
+// -------------------------------------------------------------
+// แบบฟอร์ม Check-in — เปิด/ปิด/บังคับกรอก ช่องมาตรฐาน + ช่องที่องค์กรเพิ่มเอง
+// -------------------------------------------------------------
+
+model FormSetting {
+  organizationId   String         @id
+  organization     Organization   @relation(fields: [organizationId], references: [id])
+  /// { company: "OPTIONAL", phone: "REQUIRED", ... } — ดู src/domain/form/form-config.ts
+  fields           Json
+  disabledPurposes VisitPurpose[]
+  updatedBy        String?
+  updatedAt        DateTime       @updatedAt
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  SELECT
+  CHECKBOX
+}
+
+model CustomField {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  label          String
+  type           CustomFieldType
+  /// ตัวเลือก (เฉพาะ SELECT)
+  options        String[]
+  required       Boolean         @default(false)
+  /// ใช้กับโหมดไหน (ว่าง = ทุกโหมด)
+  modes          SiteMode[]
+  showOnPass     Boolean         @default(false)
+  isActive       Boolean         @default(true)
+  sortOrder      Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([organizationId, sortOrder])
+}
