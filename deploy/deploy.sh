@@ -15,7 +15,7 @@ echo "2/5 ส่งโปรแกรมขึ้น Server"
 rsync -az --delete -e "ssh -i $KEY -o StrictHostKeyChecking=accept-new" \
   --exclude /node_modules --exclude /.next --exclude /.env --exclude '/.env.*' --exclude /storage --exclude /backups \
   --exclude /.pgdata --exclude /src/generated --exclude /public/ocr --exclude /docs --exclude '/*.command' \
-  --exclude '/*.zip' --exclude /.claude --exclude .DS_Store \
+  --exclude '/*.zip' --exclude /.claude --exclude /.git --exclude .DS_Store \
   ./ "root@$IP:/opt/mana/"
 
 echo "3/5 ตั้งค่า"
